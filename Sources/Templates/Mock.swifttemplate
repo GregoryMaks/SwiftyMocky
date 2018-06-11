@@ -256,31 +256,47 @@ import SourceryRuntime
         let variable: SourceryRuntime.Variable
         let scope: String
 
-        var privatePrototypeName: String { return "__\(variable.name)" }
-
         var getter: String {
-            let message = "\(scope) - value for \(variable.name) was not defined"
-            let orFail = !(variable.isOptional && !variable.isImplicitlyUnwrappedOptional) ? ".orFail(\"\(message)\")" : ""
+            var result = "get {"
+            var strings = [String]()
+            strings.append("addInvocation(.\(propertyCaseGetName))")
+            strings.append("let perform = methodPerformValue(.\(propertyCaseGetName)) as? (() -> Void)")
+            strings.append("perform?()")
+            strings.append("let givenValue: (value: Any?, error: Error?) = methodReturnValue(.\(propertyCaseGetName))")
+            strings.append("let value = givenValue.value as? \(variable.typeName)")
+
             let staticModifier = variable.isStatic ? "\(scope)." : ""
-            return "get {\t\(staticModifier)invocations.append(.\(propertyCaseGetName))" + "\n\t\t\t\treturn \(staticModifier)\(privatePrototypeName)\(orFail) }"
+            strings.append("return value.orFail(\"stub return value not specified for \(staticModifier)\(propertyCaseGetName)(). Use given\")")
+            
+            result += strings.reduce("", { $0 + "\n\t\t\t" + $1 })
+            result += "\n\t\t}"
+            return result
         }
         var setter: String {
-            let staticModifier = variable.isStatic ? "\(scope)." : ""
-            return "set {\t\(staticModifier)invocations.append(.\(propertyCaseSetName)(.value(newValue)))" + "\n\t\t\t\t\(variable.isStatic ? "\(scope)." : "")\(privatePrototypeName) = newValue }"
+            var result = "set {"
+            var strings = [String]()
+            let parameter = TypeWrapper(variable.typeName).nestedParameter
+
+            strings.append("addInvocation(.\(propertyCaseSetName)(\(parameter).value(newValue)))")
+            strings.append("let perform = methodPerformValue(.\(propertyCaseSetName)(\(parameter).value(newValue))) as? ((\(variable.typeName)) -> Void)")
+            strings.append("perform?(newValue)")
+
+            result += strings.reduce("", { $0 + "\n\t\t\t" + $1 })
+            result += "\n\t\t}"
+            return result
         }
         var prototype: String {
             let staticModifier = variable.isStatic ? "static " : ""
 
-            return "\(staticModifier)var \(variable.name): \(variable.typeName.name) { \n" +
-            "\t\t\(getter)\n" +
-            "\t\t\(setter)\n" +
-            "\t}"
+            var result = "\(staticModifier)var \(variable.name): \(variable.typeName.name) { \n"
+            result += "\t\t\(getter)\n"
+            if variable.isMutable {
+                result += "\t\t\(setter)\n"
+            }
+            result += "\t}"
+            return result
         }
 
-        var privatePrototype: String {
-            let staticModifier = variable.isStatic ? "static " : ""
-            return "private \(staticModifier)var \(privatePrototypeName): (\(variable.typeName.unwrappedTypeName))?"
-        }
         var nestedType: String {
             return "\(TypeWrapper(variable.typeName).nestedParameter)"
         }
@@ -320,6 +336,51 @@ import SourceryRuntime
         }
         func propertyCaseSetIntValue() -> String {
             return "case .\(propertyCaseSetName)(let newValue): return newValue.intValue"
+        }
+
+        // Given
+        func givenConstructorName(prefix: String = "") -> String {
+            return "static func \(propertyCaseGetName)(willReturn: \(variable.typeName)) -> \(prefix)Given"
+        }
+
+        func givenConstructor(prefix: String = "") -> String {
+            return "return \(prefix)Given(method: .\(propertyCaseGetName), returns: willReturn, throws: nil)"
+        }
+
+        // Verify
+        func verificationProxyConstructorNameForGet(prefix: String = "") -> String {
+            return "static func \(propertyCaseGetName)() -> \(prefix)Verify"
+        }
+
+        func verificationProxyConstructorNameForSet(prefix: String = "") -> String {
+            let parameter = TypeWrapper(variable.typeName).nestedParameter
+            return "static func \(propertyCaseSetName)(value: \(parameter)) -> \(prefix)Verify"
+        }
+
+        func verificationProxyConstructorForGet(prefix: String = "") -> String {
+            return "return \(prefix)Verify(method: .\(propertyCaseGetName))"
+        }
+
+        func verificationProxyConstructorForSet(prefix: String = "") -> String {
+            return "return \(prefix)Verify(method: .\(propertyCaseSetName)(value))"
+        }
+
+        // Perform
+        func performProxyConstructorNameForGet(prefix: String = "") -> String {
+            return "static func \(propertyCaseGetName)(perform: () -> Void) -> \(prefix)Perform"
+        }
+
+        func performProxyConstructorNameForSet(prefix: String = "") -> String {
+            let parameter = TypeWrapper(variable.typeName).nestedParameter
+            return "static func \(propertyCaseSetName)(value: \(parameter), performs: (\(variable.typeName)) -> Void) -> \(prefix)Perform"
+        }
+
+        func performProxyConstructorForGet(prefix: String = "") -> String {
+            return "return \(prefix)Perform(method: .\(propertyCaseGetName), performs: perform)"
+        }
+
+        func performProxyConstructorForSet(prefix: String = "") -> String {
+            return "return \(prefix)Perform(method: .\(propertyCaseSetName)(value), performs: perform)"
         }
     }
 
@@ -848,9 +909,13 @@ import SourceryRuntime
         return MethodWrapper(method)
     }
 
+    func wrapVariable(_ variable: SourceryRuntime.Variable) -> VariableWrapper {
+        return VariableWrapper(variable, scope: "")
+    }
+
     func stubProperty(_ variable: SourceryRuntime.Variable, _ scope: String) -> String {
         let wrapper = VariableWrapper(variable, scope: scope)
-        return "\(wrapper.prototype)\n\t\(wrapper.privatePrototype)"
+        return "\(wrapper.prototype)"
     }
 
     func propertyTypes(_ variable: SourceryRuntime.Variable) -> String {
@@ -1161,20 +1226,43 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
             self.`throws` = `throws`
         }
 
+        <%_ for variable in allVariables.filter({ !$0.isMutable }).map(wrapVariable) { -%>
+        <%= variable.givenConstructorName() -%> {
+            <%= variable.givenConstructor() _%>
+        }
+        <%_ } %> <%_ -%>
+
         <%_ for method in wrappedMethodsForMethodType.filter({ !$0.method.returnTypeName.isVoid && !$0.method.isInitializer }) { -%>
         <%= method.givenConstructorName() -%> {
             <%= method.givenConstructor() _%>
         }
         <%_ } -%>
+
         <%_ for method in wrappedMethodsForMethodType.filter({ ($0.method.throws || $0.method.rethrows) && !$0.method.isInitializer }) { -%>
         <%= method.givenConstructorNameThrows() -%> {
             <%= method.givenConstructorThrows() _%>
         }
         <%_  } %> <%_ -%>
+
     }
 
     struct Verify {
         fileprivate var method: MethodType
+
+        <%_ for variable in allVariables.filter({ !$0.isMutable }).map(wrapVariable) { -%>
+        <%= variable.verificationProxyConstructorNameForGet() -%> {
+            <%= variable.verificationProxyConstructorForGet() _%>
+        }
+        <%_ } %> <%_ -%>
+
+        <%_ for variable in allVariables.filter({ $0.isMutable }).map(wrapVariable) { -%>
+        <%= variable.verificationProxyConstructorNameForGet() -%> {
+            <%= variable.verificationProxyConstructorForGet() _%>
+        }
+        <%= variable.verificationProxyConstructorNameForSet() -%> {
+            <%= variable.verificationProxyConstructorForSet() _%>
+        }
+        <%_ } %> <%_ -%>
 
         <%_ for method in wrappedMethodsForMethodType { -%>
         <%= method.verificationProxyConstructorName() -%> {
@@ -1186,6 +1274,21 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
     struct Perform {
         fileprivate var method: MethodType
         var performs: Any
+
+        <%_ for variable in allVariables.filter({ !$0.isMutable }).map(wrapVariable) { -%>
+        <%= variable.performProxyConstructorNameForGet() -%> {
+            <%= variable.performProxyConstructorForGet() _%>
+        }
+        <%_ } %> <%_ -%>
+
+        <%_ for variable in allVariables.filter({ $0.isMutable }).map(wrapVariable) { -%>
+        <%= variable.performProxyConstructorNameForGet() -%> {
+            <%= variable.performProxyConstructorForGet() _%>
+        }
+        <%= variable.performProxyConstructorNameForSet() -%> {
+            <%= variable.performProxyConstructorForSet() _%>
+        }
+        <%_ } %> <%_ -%>
 
         <%_ for method in wrappedMethodsForMethodType { -%>
         <%= method.performProxyConstructorName() -%> {
@@ -1211,13 +1314,13 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
 
     public func verify(_ method: Verify, count: Count = Count.moreOrEqual(to: 1), file: StaticString = #file, line: UInt = #line) {
         let invocations = matchingCalls(method.method)
-        MockyAssert(count.matches(invocations.count), "Expeced: \(count) invocations of `\(method.method)`, but was: \(invocations.count)", file: file, line: line)
+        MockyAssert(count.matches(invocations.count), "Expected: \(count) invocations of `\(method.method)`, but was: \(invocations.count)", file: file, line: line)
     }
     <%_ if containsVariables { -%>
 
     public func verify(property: Property, count: Count = Count.moreOrEqual(to: 1), file: StaticString = #file, line: UInt = #line) {
         let invocations = matchingCalls(property.method)
-        MockyAssert(count.matches(invocations.count), "Expeced: \(count) invocations of `\(property.method)`, but was: \(invocations.count)", file: file, line: line)
+        MockyAssert(count.matches(invocations.count), "Expected: \(count) invocations of `\(property.method)`, but was: \(invocations.count)", file: file, line: line)
     }
     <%_ } else { -%>
     public func verify(property: Property, count: Count = Count.moreOrEqual(to: 1), file: StaticString = #file, line: UInt = #line) { }
@@ -1259,13 +1362,13 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
 
     static public func verify(_ method: StaticVerify, count: Count = Count.moreOrEqual(to: 1), file: StaticString = #file, line: UInt = #line) {
         let invocations = matchingCalls(method.method)
-        MockyAssert(count.matches(invocations.count), "Expeced: \(count) invocations of `\(method.method)`, but was: \(invocations.count)", file: file, line: line)
+        MockyAssert(count.matches(invocations.count), "Expected: \(count) invocations of `\(method.method)`, but was: \(invocations.count)", file: file, line: line)
     }
     <%_ if containsStaticVariables { -%>
 
     static public func verify(property: StaticProperty, count: Count = Count.moreOrEqual(to: 1), file: StaticString = #file, line: UInt = #line) {
         let invocations = matchingCalls(property.method)
-        MockyAssert(count.matches(invocations.count), "Expeced: \(count) invocations of `\(property.method)`, but was: \(invocations.count)", file: file, line: line)
+        MockyAssert(count.matches(invocations.count), "Expected: \(count) invocations of `\(property.method)`, but was: \(invocations.count)", file: file, line: line)
     }
     <%_ } else { -%>
     static public func verify(property: StaticProperty, count: Count = Count.moreOrEqual(to: 1), file: StaticString = #file, line: UInt = #line) { }
