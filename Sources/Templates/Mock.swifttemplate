@@ -1237,7 +1237,6 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
             <%= method.givenConstructor() _%>
         }
         <%_ } -%>
-
         <%_ for method in wrappedMethodsForMethodType.filter({ ($0.method.throws || $0.method.rethrows) && !$0.method.isInitializer }) { -%>
         <%= method.givenConstructorNameThrows() -%> {
             <%= method.givenConstructorThrows() _%>
@@ -1254,7 +1253,6 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
             <%= variable.verificationProxyConstructorForGet() _%>
         }
         <%_ } %> <%_ -%>
-
         <%_ for variable in allVariables.filter({ $0.isMutable }).map(wrapVariable) { -%>
         <%= variable.verificationProxyConstructorNameForGet() -%> {
             <%= variable.verificationProxyConstructorForGet() _%>
@@ -1280,7 +1278,6 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
             <%= variable.performProxyConstructorForGet() _%>
         }
         <%_ } %> <%_ -%>
-
         <%_ for variable in allVariables.filter({ $0.isMutable }).map(wrapVariable) { -%>
         <%= variable.performProxyConstructorNameForGet() -%> {
             <%= variable.performProxyConstructorForGet() _%>
