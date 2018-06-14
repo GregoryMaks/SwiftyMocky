@@ -1226,7 +1226,7 @@ class <%= type.name %>Mock<%= genericTypesModifier %>:<%= type.annotations["Objc
             self.`throws` = `throws`
         }
 
-        <%_ for variable in allVariables.filter({ !$0.isMutable }).map(wrapVariable) { -%>
+        <%_ for variable in allVariables.map(wrapVariable) { -%>
         <%= variable.givenConstructorName() -%> {
             <%= variable.givenConstructor() _%>
         }
